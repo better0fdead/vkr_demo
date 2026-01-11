@@ -1,0 +1,69 @@
+
+@startuml
+title Внутренние процессы Raft
+
+actor "Client" as Client
+participant "QUIC Сервер" as Server
+participant "GroupRaftPool" as RaftPool
+participant "Raft Node" as Raft
+participant "FSM" as FSM
+database "Bolt Storage" as Storage
+
+group join
+    alt Новая группа
+        Client -> Server: Запрос с group, member, config
+        Server -> RaftPool: 1. CreateGroup(group, config)
+        RaftPool -> Raft: 2. NewRaft()
+        Raft -> Storage: 3. Инициализация хранилища
+        Raft -> FSM: 4. NewFSM(config)
+        FSM --> Raft: 5. FSM готов
+        Raft --> RaftPool: 7. Raft node готов
+        RaftPool --> Server: 8. Группа создана
+    else Существующая группа
+        Client -> Server: join(group, member)
+        Server -> Raft: 1. Apply("join", group, member)
+        Raft -> FSM: 2. Apply log entry
+        FSM -> FSM: 3. Добавление участника
+        FSM -> FSM: 4. electLeaderIfNeeded()
+        FSM --> Raft: 5. Обновление состояния выполнено
+        Raft --> Server: 6. Operation result
+        Server --> Client: 7. Ответ
+    end
+end
+
+group Heartbeat
+    Client -> Server: heartbeat(group, member)
+    Server -> Raft: 1. Apply("hb", group, member)
+    Raft -> FSM: 2. Apply log entry
+    FSM -> FSM: 3. UpdateMemberLastSeen()
+    FSM -> FSM: 4. Проверка:\n- Активность лидера\n- Таймауты
+    alt Лидер активен
+        FSM --> Raft: 5. Статус без изменений
+    else Лидер неактивен
+        FSM -> FSM: 6. electNewLeader()
+        FSM --> Raft: 7. Избран новый лидер
+    end
+    Raft --> Server: 8. Operation result
+    Server --> Client: 9. Response(Leader, isLeader)
+end
+
+group Запрос состояния группы
+    Client -> Server: getGroupState(group)
+    Server -> FSM: 1. Получить состояние
+    FSM --> Server: 2. GroupState{Leader, Members}
+    Server --> Client: 3. ResponseState
+end
+
+group Leave
+    Client -> Server: leave(group, member)
+    Server -> Raft: 1. Apply("leave", group, member)
+    Raft -> FSM: 2. Apply log entry
+    FSM -> FSM: 3. Удаление участника
+    alt Ушедший участник был лидером
+        FSM -> FSM: 4. electNewLeader()
+    end
+    FSM --> Raft: 5. Обновление состояния выполнено
+    Raft --> Server: 6. Operation confirmed
+    Server --> Client: 7. Ответ
+end
+@enduml

@@ -1,0 +1,85 @@
+
+@startuml
+title Взаимодействие с клиентом
+
+actor "Сервис-клиент" as Client
+participant "Клиентская библиотека" as Lib
+participant "QUIC Сервер" as Server
+
+== Инициализация ==
+Client -> Lib: 1. NewClient(group, ...options)
+Lib --> Client: 2. Клиент создан
+
+== Подключение ==
+Client -> Lib: 3. Start()
+Lib -> Lib: 4. Создание goroutines для\nподключения и мониторинга
+
+group Установка соединения
+  Lib -> Lib: 5. CreateStream()
+  Lib -> Server: 6. QUIC Handshake (HTTP3)
+  Server --> Lib: 7. Подключение установлено
+  Lib -> Server: 8. JoinGroup(group, member, config)
+  Server --> Lib: 9. OK
+  Lib -> Lib: 10. Запуск readLoop и heartbeatLoop
+end
+
+Lib --> Client: 11. Соединение установлено
+
+== Основной цикл работы ==
+group readLoop
+  Server --> Lib: 12. Leader status события
+  Lib -> Lib: 13. Обработка состояния лидера
+
+  alt Изменение лидера
+    Lib -> Client: 14. OnLeaderChanged(event)
+  end
+
+  alt Стал лидером
+    Lib -> Client: 15. OnImLeader(event)
+  end
+
+  alt Перестал быть лидером
+    Lib -> Client: 16. OnImNotLeader(event)
+  end
+end
+
+group heartbeatLoop
+  loop Каждые 5 секунд
+    Lib -> Server: 17. Heartbeat(group, member)
+  end
+end
+
+== Обработка ошибок соединения ==
+group reconnectionMonitor
+  Lib -> Lib: 18. Обнаружен разрыв соединения
+
+  loop До восстановления соединения
+    Lib -> Lib: 19. tryReconnect()
+    Lib -> Server: 20. Повторное подключение
+
+    alt Успешное подключение
+      Server --> Lib: 21. Подключение восстановлено
+      Lib -> Server: 22. JoinGroup(group, member)
+      note right: Восстановление мониторинга
+    else Ошибка подключения
+      Lib -> Lib: 23. Ожидание retryInterval
+    end
+  end
+end
+
+== Получение состояния группы ==
+  Client -> Lib: 24. GetGroupState(group)
+  Lib -> Server: 25. GET_STATE запрос
+  Server --> Lib: 26. Текущее состояние группы
+  Lib --> Client: 27. GroupState
+
+== Завершение работы ==
+Client -> Lib: 28. Close()
+Lib -> Lib: 29. Остановка всех goroutines
+Lib -> Server: 30. LeaveGroup(group, member)
+Server --> Lib: 31. OK
+Lib -> Server: 32. Закрытие соединения
+Lib -> Lib: 33. Закрытие RoundTripper
+Lib --> Client: 34. Клиент закрыт
+
+@enduml
